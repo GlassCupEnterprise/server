@@ -1,0 +1,51 @@
+-- source include/have_innodb.inc
+-- source include/have_query_cache.inc
+-- source include/not_embedded.inc
+
+--echo #
+--echo # MDEV-16087 Inconsistent SELECT results when query cache is enabled
+--echo #
+
+set GLOBAL query_cache_type=ON;
+set LOCAL query_cache_type=ON;
+
+connect (con1,localhost,root,,test,$MASTER_MYPORT,$MASTER_MYSOCK);
+connect (con2,localhost,root,,test,$MASTER_MYPORT,$MASTER_MYSOCK);
+connect (con3,localhost,root,,test,$MASTER_MYPORT,$MASTER_MYSOCK);
+
+connection con1;
+
+create table t1 (id bigint(20) auto_increment, primary key (id)) ENGINE=InnoDB;
+create table t2 (id bigint(20) auto_increment, primary key (id)) ENGINE=InnoDB;
+create table t3 (id bigint(20) auto_increment, primary key (id)) ENGINE=InnoDB;
+
+connection con2;
+set autocommit=0;
+select * from t2;
+
+connection con1;
+insert into t3 () values ();
+
+connection con2;
+insert into t1 () values ();
+select count(*) from t3;
+
+connection con3;
+set autocommit=0;
+select count(*) from t3;
+select count(*) from t3;
+select sql_no_cache count(*) from t3;
+
+rollback;
+
+connection con2;
+
+rollback;
+
+connection con1;
+
+drop table t1;
+drop table t2;
+drop table t3;
+
+set GLOBAL query_cache_type=default;

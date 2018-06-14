@@ -5905,6 +5905,52 @@ func_exit:
 	goto loop;
 }
 
+/** Check if mysql can allow the transaction to read from/store to
+the query cache.
+@param[in]	table	table which undergoes transaction operation
+@param[in]	trx	transaction object
+@return whether the storing or retrieving from the query cache is permitted */
+static
+bool
+row_search_check_if_query_cache_permitted_low(
+	const dict_table_t*	table,
+	trx_t*			trx)
+{
+	/* The following conditions will decide the query cache retrieval or
+	storing:
+	(1) There should not be any locks on the table.
+	(2) For read only transaction, a read view has not created then
+	it doesn't matter what this transaction sees.
+	(3) For read only/read write transaction, If read view exists then
+	view low_limit_id is the max trx id that this transaction saw at
+	the time of the read view creation. */
+	if (!lock_table_get_n_locks(table)) {
+
+		if (trx->id == 0) {
+
+			if (!MVCC::is_view_active(trx->read_view)) {
+				return true;
+			}
+
+			if (trx->read_view->low_limit_id()
+			    >= table->query_cache_inv_id) {
+				return true;
+			}
+
+			return false;
+		}
+
+
+		/* For read-write transactions, InnoDB should check condition (3) */
+		return (trx->id >= table->query_cache_inv_id
+			&& (trx->read_view == NULL
+			    || trx->read_view->low_limit_id()
+					>= table->query_cache_inv_id));
+	}
+
+	return false;
+}
+
 /*******************************************************************//**
 Checks if MySQL at the moment is allowed for this table to retrieve a
 consistent read result, or store it to the query cache.
@@ -5928,20 +5974,8 @@ row_search_check_if_query_cache_permitted(
 
 	trx_start_if_not_started(trx, false);
 
-	/* If there are locks on the table or some trx has invalidated the
-	cache before this transaction started then this transaction cannot
-	read/write from/to the cache.
+	bool ret = row_search_check_if_query_cache_permitted_low(table, trx);
 
-	If a read view has not been created for the transaction then it doesn't
-	really matter what this transaction sees. If a read view was created
-	then the view low_limit_id is the max trx id that this transaction
-	saw at the time of the read view creation.  */
-
-	const bool ret = lock_table_get_n_locks(table) == 0
-		&& ((trx->id != 0 && trx->id >= table->query_cache_inv_id)
-		    || !MVCC::is_view_active(trx->read_view)
-		    || trx->read_view->low_limit_id()
-		    >= table->query_cache_inv_id);
 	if (ret) {
 		/* If the isolation level is high, assign a read view for the
 		transaction if it does not yet have one */
